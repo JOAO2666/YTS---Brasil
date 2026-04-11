@@ -42,7 +42,13 @@ builder.defineStreamHandler(async (args) => {
     return { streams };
 });
 
-// Server Initialization
-const PORT = process.env.PORT || 7000;
-serveHTTP(builder.getInterface(), { port: PORT });
-console.log(`Addon YTSBR listening on port ${PORT}`);
+// Vercel Serverless Engine Support
+if (process.env.VERCEL) {
+    const { getRouter } = require('stremio-addon-sdk');
+    module.exports = getRouter(builder.getInterface());
+} else {
+    // Server Initialization Local/Web Service (Render/Heroku)
+    const PORT = process.env.PORT || 7000;
+    serveHTTP(builder.getInterface(), { port: PORT });
+    console.log(`Addon YTSBR listening on port ${PORT}`);
+}
