@@ -3,13 +3,13 @@ const cheerio = require('cheerio');
 const NodeCache = require('node-cache');
 
 const BASE_URL = 'https://ytsbr.com';
-const myCache = new NodeCache({ stdTTL: 3600 * 24 });
+const myCache = new NodeCache({ stdTTL: 3600 * 2 }); // Reduzido TTL para 2h para ser mais dinâmico
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36';
 
 async function getBrazilianTitle(imdbId, englishTitle) {
     try {
         const wikiSearch = `https://en.wikipedia.org/w/api.php?action=query&prop=langlinks&lllang=pt&titles=${encodeURIComponent(englishTitle)}&format=json&redirects=1`;
-        const res = await axios.get(wikiSearch, { headers: { 'User-Agent': UA }, timeout: 3000 });
+        const res = await axios.get(wikiSearch, { headers: { 'User-Agent': UA }, timeout: 2500 });
         const pages = res.data?.query?.pages;
         if (pages) {
             const page = Object.values(pages)[0];
@@ -20,15 +20,17 @@ async function getBrazilianTitle(imdbId, englishTitle) {
 }
 
 async function smartSearch(title, year = '') {
+    if (!title) return null;
     const cleanTitle = title.split(':')[0].trim();
     const firstWord = cleanTitle.split(' ')[0].replace(/[^a-zA-Z0-9]/g, '');
-    const queries = [...new Set([title, cleanTitle, `${firstWord} ${year}`])];
+    const queries = [...new Set([title, cleanTitle, `${firstWord} ${year}`.trim()])];
 
     try {
         const promises = [];
         queries.forEach(q => {
-            promises.push(axios.get(`${BASE_URL}/ajax/search_v2.php?q=${encodeURIComponent(q)}&lang=pt-br`, { headers: { 'User-Agent': UA, 'Referer': BASE_URL }, timeout: 5000 }).catch(() => null));
-            promises.push(axios.get(`${BASE_URL}/ajax/search_v2.php?q=${encodeURIComponent(q)}&lang=global`, { headers: { 'User-Agent': UA, 'Referer': BASE_URL }, timeout: 5000 }).catch(() => null));
+            if (q.length < 2) return;
+            promises.push(axios.get(`${BASE_URL}/ajax/search_v2.php?q=${encodeURIComponent(q)}&lang=pt-br`, { headers: { 'User-Agent': UA, 'Referer': BASE_URL }, timeout: 4000 }).catch(() => null));
+            promises.push(axios.get(`${BASE_URL}/ajax/search_v2.php?q=${encodeURIComponent(q)}&lang=global`, { headers: { 'User-Agent': UA, 'Referer': BASE_URL }, timeout: 4000 }).catch(() => null));
         });
 
         const responses = await Promise.all(promises);
@@ -59,9 +61,9 @@ async function smartSearch(title, year = '') {
 }
 
 async function getCatalog(type) {
-    const url = type === 'movie' ? `${BASE_URL}/filmes-torrent/` : `${BASE_URL}/series-torrent/`;
+    const url = (type === 'movie') ? `${BASE_URL}/filmes-torrent/` : `${BASE_URL}/series-torrent/`;
     try {
-        const res = await axios.get(url, { headers: { 'User-Agent': UA } });
+        const res = await axios.get(url, { headers: { 'User-Agent': UA }, timeout: 5000 });
         const $ = cheerio.load(res.data);
         const metas = [];
         $('a').each((i, el) => {
@@ -82,7 +84,7 @@ async function getCatalog(type) {
 
 async function getMeta(type, slug) {
     try {
-        const res = await axios.get(`${BASE_URL}/${slug}/`, { headers: { 'User-Agent': UA } });
+        const res = await axios.get(`${BASE_URL}/${slug}/`, { headers: { 'User-Agent': UA }, timeout: 5000 });
         const $ = cheerio.load(res.data);
         const poster = $('meta[property="og:image"]').attr('content') || '';
         return {
@@ -96,7 +98,7 @@ async function getMeta(type, slug) {
 }
 
 async function getStreams(type, id) {
-    const cacheKey = `streams_${id}`;
+    const cacheKey = `streams_v2_${id}`;
     const cached = myCache.get(cacheKey);
     if (cached) return cached;
 
@@ -108,20 +110,29 @@ async function getStreams(type, id) {
             const [imdbId, s, e] = id.split(':');
             if (e) targetEp = parseInt(e);
 
-            const cinemetaUrl = `https://v3-cinemeta.strem.io/meta/${type === 'movie' ? 'movie' : 'series'}/${imdbId}.json`;
-            const cinemeta = await axios.get(cinemetaUrl).catch(() => null);
-            if (!cinemeta || !cinemeta.data || !cinemeta.data.meta) return [];
+            const cinemetaUrl = `https://v3-cinemeta.strem.io/meta/${(type === 'movie') ? 'movie' : 'series'}/${imdbId}.json`;
+            console.log(`[Scraper] Buscando Meta: ${imdbId}`);
+            
+            // BUSCA PARALELA PARA VELOCIDADE MÁXIMA
+            const cinemetaPromise = axios.get(cinemetaUrl, { timeout: 3000 }).catch(() => null);
+            const brTitlePromise = getBrazilianTitle(imdbId, ''); // Tentaremos buscar depois se necessário
+            
+            const [cinemetaRes] = await Promise.all([cinemetaPromise]);
+            if (!cinemetaRes || !cinemetaRes.data || !cinemetaRes.data.meta) return [];
 
-            const meta = cinemeta.data.meta;
+            const meta = cinemetaRes.data.meta;
             const englishTitle = meta.name;
             const year = meta.year || '';
 
-            let match = await smartSearch(englishTitle, year);
+            // Busca os dois títulos (Original e BR) em paralelo se possível
             const brTitle = await getBrazilianTitle(imdbId, englishTitle);
-            if (brTitle && brTitle !== englishTitle) {
-                const brMatch = await smartSearch(brTitle, year);
-                if (brMatch) match = brMatch;
-            }
+            
+            const searchPromises = [smartSearch(englishTitle, year)];
+            if (brTitle && brTitle !== englishTitle) searchPromises.push(smartSearch(brTitle, year));
+
+            const searchResults = await Promise.all(searchPromises);
+            // Prioridade para o resultado Brasileiro (Geralmente o index [1] se houver tradução)
+            const match = searchResults[1] || searchResults[0];
 
             if (!match) return [];
             
@@ -133,26 +144,31 @@ async function getStreams(type, id) {
             }
         }
 
-        const res = await axios.get(fetchUrl, { headers: { 'User-Agent': UA }, timeout: 10000 });
+        console.log(`[Scraper] Extraindo de: ${fetchUrl}`);
+        const res = await axios.get(fetchUrl, { headers: { 'User-Agent': UA }, timeout: 6000 });
         const $ = cheerio.load(res.data);
         const streams = [];
 
         $('[data-downloads]').each((i, el) => {
-            const data = JSON.parse($(el).attr('data-downloads') || '[]');
-            const context = $(el).closest('li, tr, .episodiotitle, .ep').text();
-            let isPack = /PACK|Completa|Temporada|Todos/i.test(context);
-            let epMatch = context.match(/E(\d+)/i) || context.match(/Ep\s*(\d+)/i) || context.match(/Epis[óo]dio\s*(\d+)/i);
-            if (targetEp && !isPack && (!epMatch || parseInt(epMatch[1]) !== targetEp)) return;
-            data.forEach(item => {
-                const hash = (item.magnet || '').match(/btih:([a-fA-F0-9]+)/i);
-                if (hash) {
-                    streams.push({
-                        name: `YTSBR ${item.quality || 'HD'}`,
-                        description: `${isPack ? '📦 PACK | ' : ''}${item.audio || ''} | ${item.size || ''}`,
-                        infoHash: hash[1]
-                    });
-                }
-            });
+            try {
+                const data = JSON.parse($(el).attr('data-downloads') || '[]');
+                const context = $(el).closest('li, tr, .episodiotitle, .ep').text();
+                let isPack = /PACK|Completa|Temporada|Todos/i.test(context);
+                let epMatch = context.match(/E(\d+)/i) || context.match(/Ep\s*(\d+)/i) || context.match(/Epis[óo]dio\s*(\d+)/i);
+                
+                if (targetEp && !isPack && (!epMatch || parseInt(epMatch[1]) !== targetEp)) return;
+                
+                data.forEach(item => {
+                    const hash = (item.magnet || '').match(/btih:([a-fA-F0-9]+)/i);
+                    if (hash) {
+                        streams.push({
+                            name: `YTSBR ${item.quality || 'HD'}`,
+                            description: `${isPack ? '📦 PACK | ' : ''}${item.audio || ''} | ${item.size || ''}`,
+                            infoHash: hash[1]
+                        });
+                    }
+                });
+            } catch (err) {}
         });
 
         if (streams.length === 0) {
@@ -171,7 +187,10 @@ async function getStreams(type, id) {
 
         myCache.set(cacheKey, streams);
         return streams;
-    } catch (e) { return []; }
+    } catch (e) { 
+        console.error(`[Scraper] Erro fatal: ${e.message}`);
+        return []; 
+    }
 }
 
 module.exports = { getCatalog, getMeta, getStreams };
