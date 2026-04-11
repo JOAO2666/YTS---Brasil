@@ -1,0 +1,11 @@
+node_modules/
+.env
+spider_test.js
+spider_test_series.js
+spider_test_series2.js
+spider_test_anime.js
+test_series.html
+test_movie.html
+test_series_links.js
+*.log
+.DS_Store
