@@ -50,11 +50,24 @@ builder.defineStreamHandler(async (args) => {
 
 const addonInterface = builder.getInterface();
 
-// Vercel Detection
+// Vercel / Cloud Compatibility
+const express = require('express');
+const app = express();
+
+app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Access-Control-Allow-Methods', '*');
+    next();
+});
+
+app.use('/', getRouter(addonInterface));
+
 if (process.env.VERCEL || process.env.NOW_REGION) {
-    module.exports = getRouter(addonInterface);
+    module.exports = app;
 } else {
     const PORT = process.env.PORT || 7000;
-    serveHTTP(addonInterface, { port: PORT });
-    console.log(`Addon YTSBR Pro rodando em: http://127.0.0.1:${PORT}`);
+    app.listen(PORT, () => {
+        console.log(`Addon YTSBR Pro rodando em: http://127.0.0.1:${PORT}`);
+    });
 }
