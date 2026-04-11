@@ -1,5 +1,6 @@
 {
   "version": 2,
+  "name": "ytsbr-stremio-addon",
   "builds": [
     {
       "src": "index.js",
