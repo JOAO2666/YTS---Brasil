@@ -1,17 +1,33 @@
 {
   "name": "ytsbr-stremio-addon",
-  "version": "1.1.0",
-  "description": "Addon YTS Brasil com Busca Universal e Cache",
+  "version": "2.0.0",
+  "description": "High-performance Stremio addon for YTS Brasil — Universal search with TMDB translation, parallel fetching, and intelligent caching.",
   "main": "index.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "start": "node index.js",
-    "test": "node test_universal.js"
+    "dev": "node --watch index.js"
+  },
+  "keywords": [
+    "stremio",
+    "addon",
+    "torrent",
+    "ytsbr",
+    "streaming"
+  ],
+  "author": "JOAO2666",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JOAO2666/YTS---Brasil.git"
   },
   "dependencies": {
-    "axios": "^1.6.0",
-    "cheerio": "^1.0.0-rc.12",
-    "express": "^4.18.2",
-    "stremio-addon-sdk": "^1.6.10",
-    "node-cache": "^5.1.2"
+    "axios": "^1.7.0",
+    "cheerio": "^1.0.0",
+    "express": "^4.21.0",
+    "node-cache": "^5.1.2",
+    "stremio-addon-sdk": "^1.6.10"
   }
 }
