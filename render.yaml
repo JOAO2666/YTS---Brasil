@@ -1,7 +1,0 @@
-services:
-  - type: web
-    name: ytsbr-stremio-addon
-    env: node
-    buildCommand: npm install
-    startCommand: node index.js
-    autoDeploy: true
