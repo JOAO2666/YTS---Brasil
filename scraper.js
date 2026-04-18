@@ -174,82 +174,186 @@ async function findBestMatch(enTitle, brTitle, year) {
 // ─── Stream Extraction ──────────────────────────────────────────────────────
 
 /**
+ * Check if a torrent covers a specific episode.
+ *
+ * Handles single episodes (S04E07), multi-episode packs (S04E01-02-03),
+ * and episode ranges (S04E01-E08).
+ *
+ * @param   {string}  filename  Torrent filename or magnet DN
+ * @param   {number}  episode   Target episode number
+ * @returns {boolean}
+ */
+function torrentCoversEpisode(filename, episode) {
+  if (!filename || !episode) return false;
+  const upper = filename.toUpperCase();
+
+  // Match "S04E07" pattern — single episode
+  const singleEps = upper.match(/[SE]\d+E(\d+)/g);
+  if (singleEps) {
+    for (const m of singleEps) {
+      const epNum = parseInt(m.match(/E(\d+)/)[1], 10);
+      if (epNum === episode) return true;
+    }
+  }
+
+  // Match "S04E01-02-03" pattern — dash-separated multi-episode
+  const multiDash = upper.match(/E(\d+(?:-\d+)+)/);
+  if (multiDash) {
+    const nums = multiDash[1].split('-').map(n => parseInt(n, 10));
+    if (nums.includes(episode)) return true;
+    // Could also be a range: E01-08 meaning episodes 1 through 8
+    if (nums.length === 2 && episode >= nums[0] && episode <= nums[1]) return true;
+  }
+
+  // Match "E01-E08" or "E01.a.E08" range pattern
+  const rangeMatch = upper.match(/E(\d+)\s*(?:-|\.?A\.?)\s*E(\d+)/);
+  if (rangeMatch) {
+    const start = parseInt(rangeMatch[1], 10);
+    const end   = parseInt(rangeMatch[2], 10);
+    if (episode >= start && episode <= end) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Determine if a data-downloads element represents a pack/semipack.
+ *
+ * Checks the surrounding text context AND the CSS class of the element
+ * for pack indicators.
+ *
+ * @param   {CheerioAPI} $    Cheerio instance
+ * @param   {Element}    el   The data-downloads element
+ * @param   {string}     ctx  Text context around the element
+ * @returns {boolean}
+ */
+function isPack($, el, ctx) {
+  // Text-based detection
+  if (/pack|completa|temporada|todos/i.test(ctx)) return true;
+
+  // CSS class-based detection (YTSBR uses "semipack-bracket")
+  const cls = $(el).attr('class') || '';
+  const parentCls = $(el).parent().attr('class') || '';
+  if (/pack|semi/i.test(cls) || /pack|semi/i.test(parentCls)) return true;
+
+  return false;
+}
+
+/**
  * Parse torrent streams from a loaded Cheerio document.
  *
  * Supports two page formats:
  *   - Modern: `[data-downloads]` JSON attribute (magnet or .torrent URL)
  *   - Legacy: Raw `<a href="magnet:…">` links (older pages, anime)
  *
- * @param   {CheerioAPI} $         Loaded Cheerio document
- * @param   {number|null} episode  Target episode number (series only)
- * @returns {Array<object>}        Stremio-compatible stream objects
+ * Episode matching strategy (when `episode` is set):
+ *   1. Exact match: torrent filename contains the target episode number
+ *   2. Pack/semipack: torrent covers a range that includes the episode
+ *   3. Fallback: if no exact match found, include all packs/semipacks
+ *
+ * @param   {CheerioAPI}  $         Loaded Cheerio document
+ * @param   {number|null} episode   Target episode number (series only)
+ * @returns {Array<object>}         Stremio-compatible stream objects
  */
 function extractStreams($, episode) {
-  const streams = [];
+  const exactStreams = [];
+  const packStreams  = [];
 
   // ── Modern: data-downloads JSON ──
   $('[data-downloads]').each((_i, el) => {
     try {
-      const raw  = $(el).attr('data-downloads');
+      const raw = $(el).attr('data-downloads');
       if (!raw) return;
 
-      const items   = JSON.parse(raw);
-      const ctx     = $(el).closest('li, tr, div, section').text();
-      const isPack  = /pack|completa|temporada|todos/i.test(ctx);
-      const epMatch = ctx.match(/(?:E|Ep\.?\s*|Epis[óo]dio\s*)(\d+)/i);
+      const items = JSON.parse(raw);
+      if (items.length === 0) return;
 
-      // Episode filtering (series only)
-      if (episode && !isPack) {
-        if (!epMatch || parseInt(epMatch[1], 10) !== episode) return;
-      }
+      const ctx      = $(el).closest('li, tr, div, section').text();
+      const packFlag = isPack($, el, ctx);
 
       for (const item of items) {
-        const magnet = item.magnet || '';
-        const label  = [
-          isPack ? '📦 PACK' : null,
+        const magnet   = item.magnet || '';
+        const hash     = magnet.match(/btih:([a-fA-F0-9]{32,})/i);
+        const dnMatch  = magnet.match(/dn=([^&]+)/i);
+        const filename = dnMatch ? decodeURIComponent(dnMatch[1]) : '';
+
+        // Determine if this specific torrent is a pack by checking filename
+        const fileIsPack = packFlag
+          || /pack|completa|temporada/i.test(filename)
+          || /E\d+-\d+/i.test(filename)               // S04E01-03
+          || /E\d+\.?a\.?E\d+/i.test(filename);       // E01aE08
+
+        // Build label
+        const label = [
+          fileIsPack ? '📦 PACK' : null,
           item.audio || null,
           item.size  || null,
         ].filter(Boolean).join(' · ');
 
-        // Magnet hash (preferred)
-        const hash = magnet.match(/btih:([a-fA-F0-9]{32,})/i);
+        // Build stream object
+        let stream = null;
         if (hash) {
-          streams.push({
-            name: `YTSBR ${item.quality || 'HD'}`,
-            description: label,
-            infoHash: hash[1],
-          });
-          continue;
+          stream = { name: `YTSBR ${item.quality || 'HD'}`, description: label, infoHash: hash[1] };
+        } else if (magnet.startsWith('http')) {
+          stream = { name: `YTSBR ${item.quality || 'HD'}`, description: label, url: magnet };
         }
+        if (!stream) continue;
 
-        // Direct .torrent URL (EN pages)
-        if (magnet.startsWith('http')) {
-          streams.push({
-            name: `YTSBR ${item.quality || 'HD'}`,
-            description: label,
-            url: magnet,
-          });
+        // Episode classification
+        if (!episode) {
+          // No episode filter — include everything
+          exactStreams.push(stream);
+        } else if (fileIsPack) {
+          // Packs always go to the pack bucket (shown as fallback or if they cover the ep)
+          if (!filename || torrentCoversEpisode(filename, episode)) {
+            stream.description = `📦 PACK · ${stream.description.replace('📦 PACK · ', '')}`;
+          }
+          packStreams.push(stream);
+        } else if (torrentCoversEpisode(filename, episode)) {
+          // Exact episode match via filename
+          exactStreams.push(stream);
+        } else {
+          // Check context text for episode number
+          const ctxEp = ctx.match(/(?:E|Ep\.?\s*|Epis[óo]dio\s*)(\d+)/i);
+          if (ctxEp && parseInt(ctxEp[1], 10) === episode) {
+            exactStreams.push(stream);
+          }
         }
       }
-    } catch { /* malformed JSON — skip silently */ }
+    } catch { /* malformed JSON — skip */ }
   });
 
   // ── Legacy: bare magnet anchors ──
-  if (streams.length === 0) {
+  if (exactStreams.length === 0 && packStreams.length === 0) {
     $('a[href^="magnet:"]').each((_i, el) => {
       const href = $(el).attr('href');
       const hash = href.match(/btih:([a-fA-F0-9]{32,})/i);
       if (hash) {
-        streams.push({
+        const text = $(el).closest('li, tr, p, div').text().trim();
+        const stream = {
           name: 'YTSBR Torrent',
-          description: $(el).closest('li, tr, p, div').text().trim().slice(0, 80),
+          description: text.slice(0, 80),
           infoHash: hash[1],
-        });
+        };
+
+        if (!episode) {
+          exactStreams.push(stream);
+        } else {
+          const dn = href.match(/dn=([^&]+)/i);
+          const fn = dn ? decodeURIComponent(dn[1]) : text;
+          if (torrentCoversEpisode(fn, episode)) {
+            exactStreams.push(stream);
+          } else {
+            packStreams.push(stream);
+          }
+        }
       }
     });
   }
 
-  return streams;
+  // Return exact matches first, then packs as fallback
+  const result = [...exactStreams, ...packStreams];
+  return result;
 }
 
 // ─── Public Handlers ────────────────────────────────────────────────────────
@@ -331,6 +435,10 @@ async function getMeta(type, slug) {
  * Orchestrates the full pipeline:
  *   Cinemeta (title) + TMDB (translation)  →  YTSBR search  →  page fetch  →  extraction
  *
+ * For series, includes slug-fallback logic: if the primary season URL
+ * returns zero streams, tries alternate slugs from search results and
+ * scrapes the main series page for season links.
+ *
  * @param   {string} type  "movie" | "series"
  * @param   {string} id    IMDb ID, optionally suffixed with ":season:episode"
  * @returns {Promise<Array<object>>}
@@ -343,6 +451,7 @@ async function getStreams(type, id) {
   try {
     let targetUrl = `${BASE_URL}/${id}/`;
     let episode   = null;
+    let allSlugs  = [];
 
     if (id.startsWith('tt')) {
       const [imdbId, season, ep] = id.split(':');
@@ -366,11 +475,26 @@ async function getStreams(type, id) {
 
       console.log(`[scraper] "${enTitle}" → "${brTitle}" (${year})`);
 
-      // Step 2 — Search YTSBR
+      // Step 2 — Search YTSBR (collect ALL matching slugs for fallback)
       const match = await findBestMatch(enTitle || brTitle, brTitle, year);
       if (!match) {
         console.log(`[scraper] ✗ no YTSBR results for ${imdbId}`);
         return [];
+      }
+
+      // Collect alternate slugs for series fallback
+      if (type === 'series' && season) {
+        const queries = [brTitle, enTitle].filter(Boolean);
+        const rawBatches = await Promise.all(
+          [...new Set(queries)].flatMap(q => [search(q, 'pt-br'), search(q, 'global')])
+        );
+        const seriesResults = rawBatches.flat().filter(r =>
+          r.tp === 'serie' || r.tp === 'tvshow'
+        );
+        const slugSet = new Set();
+        slugSet.add(match.s);
+        seriesResults.forEach(r => slugSet.add(r.s));
+        allSlugs = [...slugSet];
       }
 
       // Step 3 — Build page URL
@@ -381,9 +505,58 @@ async function getStreams(type, id) {
 
     // Step 4 — Fetch & extract
     console.log(`[scraper] ↓ ${targetUrl}`);
-    const { data: html } = await axios.get(targetUrl, { ...HTTP, timeout: T_PAGE });
-    const $ = cheerio.load(html);
-    const streams = extractStreams($, episode);
+    let streams = [];
+
+    try {
+      const { data: html } = await axios.get(targetUrl, { ...HTTP, timeout: T_PAGE });
+      const $ = cheerio.load(html);
+      streams = extractStreams($, episode);
+    } catch (fetchErr) {
+      console.log(`[scraper] ⚠ primary URL failed: ${fetchErr.message}`);
+    }
+
+    // Step 5 — Slug fallback for series (try alternate slugs)
+    if (streams.length === 0 && allSlugs.length > 1) {
+      const [, season] = id.split(':');
+      for (const altSlug of allSlugs.slice(1)) {
+        const altUrl = `${BASE_URL}/${season}-temporada/${altSlug}/`;
+        console.log(`[scraper] ↓ fallback: ${altUrl}`);
+        try {
+          const { data: html } = await axios.get(altUrl, { ...HTTP, timeout: T_PAGE });
+          const $ = cheerio.load(html);
+          streams = extractStreams($, episode);
+          if (streams.length > 0) break;
+        } catch { /* try next slug */ }
+      }
+    }
+
+    // Step 6 — Series page fallback (scrape season links from main page)
+    if (streams.length === 0 && type === 'series' && allSlugs.length > 0) {
+      const [, season] = id.split(':');
+      for (const slug of allSlugs) {
+        try {
+          const mainUrl = `${BASE_URL}/serie/${slug}/`;
+          console.log(`[scraper] ↓ checking main page: ${mainUrl}`);
+          const { data: html } = await axios.get(mainUrl, { ...HTTP, timeout: T_PAGE });
+          const $ = cheerio.load(html);
+          const seasonPattern = new RegExp(`/${season}-temporada/([^/]+)/`);
+          let seasonUrl = null;
+          $('a[href]').each((_i, el) => {
+            const href = $(el).attr('href') || '';
+            const m = href.match(seasonPattern);
+            if (m) { seasonUrl = href; return false; }
+          });
+          if (seasonUrl) {
+            const fullUrl = seasonUrl.startsWith('http') ? seasonUrl : `${BASE_URL}${seasonUrl}`;
+            console.log(`[scraper] ↓ discovered season link: ${fullUrl}`);
+            const { data: shtml } = await axios.get(fullUrl, { ...HTTP, timeout: T_PAGE });
+            const $s = cheerio.load(shtml);
+            streams = extractStreams($s, episode);
+            if (streams.length > 0) break;
+          }
+        } catch { /* try next slug */ }
+      }
+    }
 
     console.log(`[scraper] ✓ ${streams.length} stream(s)`);
     if (streams.length > 0) cache.set(key, streams);
