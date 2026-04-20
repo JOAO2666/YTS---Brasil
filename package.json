@@ -1,14 +1,15 @@
 {
   "name": "ytsbr-stremio-addon",
-  "version": "2.0.0",
-  "description": "High-performance Stremio addon for YTS Brasil — Universal search with TMDB translation, parallel fetching, and intelligent caching.",
+  "version": "3.1.0",
+  "description": "Stremio addon multi-provider (YTSBR, NerdFilmes, XFilmes, HDR, Apache, Nyaa) com cache Supabase pré-indexado e integração Real-Debrid opcional.",
   "main": "index.js",
   "engines": {
     "node": ">=18.0.0"
   },
   "scripts": {
     "start": "node index.js",
-    "dev": "node --watch index.js"
+    "dev": "node --watch index.js",
+    "indexer": "node scripts/indexer.js"
   },
   "keywords": [
     "stremio",
@@ -24,6 +25,7 @@
     "url": "https://github.com/JOAO2666/YTS---Brasil.git"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.104.0",
     "axios": "^1.7.0",
     "cheerio": "^1.0.0",
     "express": "^4.21.0",

@@ -22,6 +22,8 @@
 const axios   = require('axios');
 const cheerio = require('cheerio');
 const Cache   = require('node-cache');
+const db      = require('./db');
+const debrid  = require('./debrid');
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -865,6 +867,21 @@ async function getStreams(type, id) {
     const season  = seasonStr ? parseInt(seasonStr, 10) : null;
     const episode = epStr     ? parseInt(epStr, 10)     : null;
 
+    // ─── FAST PATH ─ Supabase cache lookup ─────────────────────────────
+    //
+    // Se o indexer já pré-populou esse título, devolvemos em ~50-200ms
+    // sem tocar em nenhum site externo. 95% das requests em tempo real
+    // caem neste caminho depois do banco estar aquecido.
+    if (db.ENABLED) {
+      const cached = await db.readCache(imdbId, season, episode);
+      if (cached && cached.length > 0) {
+        console.log(`[scraper] ⚡ cache hit: ${cached.length} streams for ${id}`);
+        const finalStreams = await debrid.transform(cached);
+        cache.set(key, finalStreams);
+        return finalStreams;
+      }
+    }
+
     const cinemetaType = type === 'movie' ? 'movie' : 'series';
     const [cinemetaRes, brTitle] = await Promise.all([
       axios.get(`${CINEMETA}/${cinemetaType}/${imdbId}.json`, { timeout: T_CINEMETA }).catch(() => null),
@@ -915,8 +932,19 @@ async function getStreams(type, id) {
     const streams = combined.map(({ __priority, ...s }) => s);
 
     console.log(`[scraper] ✓ total ${streams.length} stream(s)`);
-    if (streams.length > 0) cache.set(key, streams);
-    return streams;
+
+    // Write-behind: salva no Supabase sem bloquear a resposta.
+    if (db.ENABLED && streams.length > 0) {
+      db.writeCache(imdbId, season, episode, streams).catch((e) =>
+        console.log(`[db] background write failed: ${e.message}`)
+      );
+    }
+
+    // Converte magnets em links HTTP via Real-Debrid (se habilitado).
+    const finalStreams = await debrid.transform(streams);
+
+    if (finalStreams.length > 0) cache.set(key, finalStreams);
+    return finalStreams;
   } catch (err) {
     console.error(`[scraper] ✗ ${err.message}`);
     return [];

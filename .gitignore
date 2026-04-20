@@ -1,9 +1,10 @@
 # Dependencies
 node_modules/
 
-# Environment
+# Environment (mantém o example versionado)
 .env
 .env.*
+!.env.example
 
 # Logs
 *.log

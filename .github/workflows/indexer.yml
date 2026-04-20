@@ -1,0 +1,44 @@
+name: Cache Indexer
+
+on:
+  # Roda a cada 6 horas (00h, 06h, 12h, 18h UTC)
+  schedule:
+    - cron: '0 */6 * * *'
+  # Permite disparar manualmente via Actions → Run workflow
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Número de títulos por tipo (filme/série)'
+        required: false
+        default: '50'
+
+concurrency:
+  group: indexer
+  cancel-in-progress: false
+
+jobs:
+  index:
+    name: Popular cache de torrents
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run indexer
+        env:
+          SUPABASE_URL:  ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:  ${{ secrets.SUPABASE_KEY }}
+          TMDB_KEY:      ${{ secrets.TMDB_KEY }}
+          INDEXER_LIMIT: ${{ github.event.inputs.limit || '50' }}
+        run: node scripts/indexer.js
