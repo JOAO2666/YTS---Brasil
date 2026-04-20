@@ -4,7 +4,7 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen?logo=node.js)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> High-performance Stremio addon that brings the entire **YTS Brasil** catalog to your fingertips — movies, series and anime with automatic title translation and parallel search.
+> Stremio addon multi-provider que agrega torrents em pt-BR de **YTS Brasil**, **NerdFilmes**, **XFilmes**, **HDR Torrent**, **Apache Torrent** e **Nyaa.si** — com tradução automática do título e busca paralela.
 
 ---
 
@@ -12,13 +12,14 @@
 
 | | Feature | Details |
 |---|---|---|
-| 🌐 | **Universal Search** | Translates English IMDb titles to Portuguese via TMDB, then searches YTSBR in both languages simultaneously |
-| ⚡ | **Parallel Pipeline** | Cinemeta metadata, TMDB translation, and YTSBR search all run concurrently — typical response under 3 s |
-| 💾 | **Smart Cache** | 2-hour in-memory cache eliminates redundant network calls; subsequent lookups return in < 50 ms |
-| 🎬 | **Movies** | 720p · 1080p · 4K — Dual Audio, Dubbed, Subtitled |
-| 📺 | **Series** | Automatic season/episode routing with full-season pack support |
-| 🇯🇵 | **Anime** | Detects both individual episodes and batch packs |
-| 🔗 | **Dual Format** | Extracts magnet hashes (pt-BR pages) and `.torrent` URLs (EN pages) |
+| 🌐 | **Multi-Provider** | YTSBR · NerdFilmes · XFilmes · HDR Torrent · Apache Torrent · Nyaa.si — todos em paralelo |
+| 🇧🇷 | **Universal Search** | Traduz títulos IMDb EN → pt-BR via TMDB e consulta os sites em ambos os idiomas simultaneamente |
+| ⚡ | **Pipeline Paralelo** | Cinemeta + TMDB + 6 providers rodam concorrentemente — resposta típica dentro do orçamento de 10 s da Vercel |
+| 💾 | **Smart Cache** | Cache de 2 h em memória; lookups subsequentes retornam em < 50 ms |
+| 🎬 | **Filmes** | 720p · 1080p · 4K — Dual Áudio, Dublado, Legendado |
+| 📺 | **Séries** | Roteamento automático por temporada/episódio com suporte a packs |
+| 🇯🇵 | **Anime** | Nyaa.si + YTSBR · detecta episódios individuais e batches |
+| 🔗 | **Formatos** | Magnet hashes (infoHash) + `.torrent` URLs + resolução de redirects (XFilmes) |
 
 ---
 
@@ -46,25 +47,37 @@ Paste the URL in **Stremio → Addons → Install from URL**.
 ## 🏗️ Architecture
 
 ```
-Stremio Client
-     │
-     ▼
-┌──────────┐     ┌──────────┐     ┌──────────┐
-│ Cinemeta │────▶│  TMDB    │────▶│  YTSBR   │
-│ (title)  │  ∥  │ (pt-BR)  │  ∥  │ (search) │
-└──────────┘     └──────────┘     └──────────┘
-     └──────────────┬──────────────────┘
-                    ▼
-             ┌────────────┐
-             │ Page Fetch │
-             │ + Extract  │
-             └────────────┘
-                    │
-                    ▼
-             magnet / .torrent
+                    Stremio Client
+                         │
+                         ▼
+            ┌────────────────────────┐
+            │  Cinemeta  ║   TMDB    │   (paralelo)
+            │  (título)  ║  (pt-BR)  │
+            └────────────┬───────────┘
+                         ▼
+   ┌────────┬────────────┬────────────┬────────────┬────────┐
+   │ YTSBR  │ NerdFilmes │  XFilmes   │   Apache   │  HDR   │  +  Nyaa
+   └────────┴────────────┴────────────┴────────────┴────────┘
+                         │   (6 providers em paralelo)
+                         ▼
+               Agregação + dedup por infoHash
+                         │
+                         ▼
+                 magnet / .torrent
 ```
 
-All external calls run in parallel via `Promise.all` to stay within Vercel's 10 s timeout.
+Todas as chamadas externas rodam em paralelo via `Promise.all`, cada provider com timeout hard para caber nos 10 s da Vercel.
+
+### Provedores
+
+| Provider | Estratégia | Foco |
+|---|---|---|
+| **YTSBR** | JSON API + `data-downloads` | Filmes/Séries pt-BR |
+| **NerdFilmes** | `/?s=` + magnets diretos | Filmes/Séries pt-BR |
+| **XFilmes** | `/?s=` + redirect 302 (`/?go=HASH` → `magnet:`) | Filmes/Séries pt-BR |
+| **HDR Torrent** | `/?s=` + magnets diretos | Filmes/Séries pt-BR |
+| **Apache Torrent** | `/?s=` + magnets diretos | Filmes/Séries pt-BR |
+| **Nyaa.si** | Tabela HTML com magnets embutidos | Animes / live-action asiático |
 
 ---
 
@@ -106,7 +119,7 @@ npm run dev        # uses --watch (Node 18+)
 | Framework | Stremio Addon SDK + Express |
 | Translation | TMDB API (free) |
 | Scraping | Axios + Cheerio |
-| Search | YTSBR internal JSON API |
+| Providers | YTSBR · NerdFilmes · XFilmes · HDR · Apache · Nyaa.si |
 | Cache | node-cache (2 h TTL) |
 | Hosting | Vercel Serverless |
 

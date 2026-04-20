@@ -20,10 +20,12 @@ const { getCatalog, getMeta, getStreams } = require('./scraper');
 
 const manifest = {
   id: 'org.joaoe.ytsbr.pro',
-  version: '2.0.0',
+  version: '3.0.0',
   name: 'YTSBR Pro',
   description:
-    'Filmes, séries e animes do YTS Brasil — busca universal com tradução automática TMDB.',
+    'Filmes, séries e animes em pt-BR — busca multi-provider em YTS Brasil, ' +
+    'NerdFilmes, XFilmes, HDR Torrent, Apache Torrent e Nyaa.si com ' +
+    'tradução automática TMDB.',
   logo: 'https://assets.ytsbr.com/favicon-32x32.png',
   background: 'https://assets.ytsbr.com/og-image.jpg',
   contactEmail: 'joao2666@users.noreply.github.com',
