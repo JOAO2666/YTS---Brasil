@@ -15,17 +15,19 @@
 const { addonBuilder, getRouter } = require('stremio-addon-sdk');
 const express = require('express');
 const { getCatalog, getMeta, getStreams } = require('./scraper');
+const db     = require('./db');
+const debrid = require('./debrid');
 
 // ─── Manifest ────────────────────────────────────────────────────────────────
 
 const manifest = {
   id: 'org.joaoe.ytsbr.pro',
-  version: '3.0.0',
+  version: '3.1.0',
   name: 'YTSBR Pro',
   description:
-    'Filmes, séries e animes em pt-BR — busca multi-provider em YTS Brasil, ' +
-    'NerdFilmes, XFilmes, HDR Torrent, Apache Torrent e Nyaa.si com ' +
-    'tradução automática TMDB.',
+    'Filmes, séries e animes em pt-BR — busca multi-provider (YTS Brasil, ' +
+    'NerdFilmes, XFilmes, HDR, Apache, Nyaa.si) com cache Supabase ' +
+    'pré-indexado e Real-Debrid opcional.',
   logo: 'https://assets.ytsbr.com/favicon-32x32.png',
   background: 'https://assets.ytsbr.com/og-image.jpg',
   contactEmail: 'joao2666@users.noreply.github.com',
@@ -81,6 +83,26 @@ app.use((_req, res, next) => {
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   if (_req.method === 'OPTIONS') return res.sendStatus(204);
   next();
+});
+
+// ─── Diagnostic endpoints ────────────────────────────────────────────────────
+
+/**
+ * Health & cache diagnostics.  Visite /health no browser para confirmar
+ * que Supabase e Real-Debrid estão ligados e ver a ocupação do cache.
+ */
+app.get('/health', async (_req, res) => {
+  const cacheStats = await db.stats();
+  res.json({
+    status:   'ok',
+    version:  manifest.version,
+    features: {
+      supabase:     db.ENABLED,
+      real_debrid:  debrid.ENABLED,
+    },
+    cache: cacheStats,
+    time:  new Date().toISOString(),
+  });
 });
 
 app.use('/', getRouter(addonInterface));

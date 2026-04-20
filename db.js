@@ -148,10 +148,47 @@ function parseSeedersFromDescription(desc) {
   return m ? parseInt(m[1], 10) : null;
 }
 
+// ─── Diagnostics ────────────────────────────────────────────────────────────
+
+/**
+ * Retorna estatísticas do cache (usado pelo endpoint /health).
+ * @returns {Promise<object>}
+ */
+async function stats() {
+  if (!ENABLED) return { enabled: false };
+
+  try {
+    const cutoff = new Date(Date.now() - MAX_AGE_MS).toISOString();
+
+    const [total, recent, providers] = await Promise.all([
+      supabase.from(TABLE).select('*', { count: 'exact', head: true }),
+      supabase.from(TABLE).select('*', { count: 'exact', head: true })
+        .gte('created_at', cutoff),
+      supabase.from(TABLE).select('provider'),
+    ]);
+
+    const byProvider = {};
+    for (const row of providers.data || []) {
+      byProvider[row.provider] = (byProvider[row.provider] || 0) + 1;
+    }
+
+    return {
+      enabled:       true,
+      total_rows:    total.count ?? null,
+      fresh_rows:    recent.count ?? null,
+      by_provider:   byProvider,
+      ttl_hours:     MAX_AGE_MS / 3_600_000,
+    };
+  } catch (e) {
+    return { enabled: true, error: e.message };
+  }
+}
+
 // ─── Exports ────────────────────────────────────────────────────────────────
 
 module.exports = {
   ENABLED,
   readCache,
   writeCache,
+  stats,
 };
