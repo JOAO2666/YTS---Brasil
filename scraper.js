@@ -2,9 +2,10 @@
  * YTSBR Pro — Multi-Provider Scraper & Search Engine
  *
  * Agrega torrents de múltiplas fontes (YTSBR, Nyaa.si, NerdFilmes,
- * XFilmes, HDR Torrent e Apache Torrent) em paralelo.  Cada provider
- * implementa uma função `searchStreams({ enTitle, brTitle, year, type,
- * season, episode })` que retorna um array de streams no formato Stremio.
+ * XFilmes, HDR Torrent, Apache Torrent, BluDV e BaixaFilmesHDR) em
+ * paralelo.  Cada provider implementa uma função `searchStreams({
+ * enTitle, brTitle, year, type, season, episode })` que retorna um
+ * array de streams no formato Stremio.
  *
  * Pipeline:
  *   1. **Translate** — TMDB converte o título IMDb EN → pt-BR.
@@ -88,6 +89,45 @@ async function resolveRedirect(url) {
   } catch (err) {
     // axios lança erro em 3xx quando maxRedirects:0 em algumas versões
     return err.response?.headers?.location || null;
+  }
+}
+
+/**
+ * Resolve o "protetor de links" systemads.xyz (usado por BluDV,
+ * BaixaFilmesHDR e similares) para o magnet URI real.
+ *
+ * O HTML da página expõe um `redirect = "...receber.php?id=TOKEN"`
+ * onde TOKEN é `base64(magnet)` com a string invertida.  Decodificamos
+ * localmente — não precisamos seguir redirects, aguardar timer nem
+ * bypass de ads.  Tempo médio: ~1 s (único GET).
+ *
+ * @param {string} url
+ * @returns {Promise<string|null>}
+ */
+async function resolveSystemadsMagnet(url) {
+  try {
+    const body = await httpGet(url, { timeout: T_REDIRECT });
+    const m = body.match(/redirect\s*=\s*["']([^"']+)["']/);
+    if (!m) return null;
+
+    const redirectUrl = m[1]
+      .replace(/&#0*38;/g, '&')
+      .replace(/&amp;/g, '&');
+
+    let parsed;
+    try { parsed = new URL(redirectUrl); } catch { return null; }
+
+    const encoded = parsed.searchParams.get('id');
+    if (!encoded) return null;
+
+    const reversed = encoded.split('').reverse().join('');
+    let decoded = '';
+    try { decoded = Buffer.from(reversed, 'base64').toString('utf8'); }
+    catch { return null; }
+
+    return decoded.startsWith('magnet:') ? decoded : null;
+  } catch {
+    return null;
   }
 }
 
@@ -674,6 +714,109 @@ const providerApache = makeWordPressProvider({
   tag:  'Apache',
 });
 
+// ─── Provider: sites protegidos por systemads.xyz (BluDV, BaixaFilmesHDR) ──
+//
+// O HTML do post NÃO tem magnets diretos; em vez disso, cada "Magnet-Link"
+// é um `<a>` apontando para `systemads.xyz/get.php?id=...`.  Resolvemos cada
+// um localmente (sem seguir redirects → sem timer/ads).
+
+function makeSystemadsProvider({ name, base, tag }) {
+  return async function providerSA({ enTitle, brTitle, year, type, season, episode }) {
+    const queries = buildWPQueries(brTitle, enTitle, year, type, season);
+    if (queries.length === 0) return [];
+
+    // Sites com systemads têm search lenta (3-4s).  Rodamos no máx 2 queries
+    // e paramos assim que acharmos pelo menos 1 candidato — a primeira
+    // query já costuma trazer o resultado com match exato.
+    const allCandidates = [];
+    for (const q of queries.slice(0, 2)) {
+      try {
+        const html = await httpGet(`${base}/?s=${encodeURIComponent(q)}`, { timeout: T_SEARCH });
+        const $ = cheerio.load(html);
+        const cands = wpCollectCandidates($, base, q, year);
+        for (const c of cands) {
+          if (!allCandidates.some((x) => x.url === c.url)) allCandidates.push(c);
+        }
+        if (allCandidates.length >= 1) break;
+      } catch { /* next */ }
+    }
+
+    if (allCandidates.length === 0) return [];
+
+    // Processa até 2 candidatos em PARALELO para caber no budget de 7.5s.
+    // Cada candidato: post fetch + até 6 protetores em paralelo.
+    const perCandidate = await Promise.all(
+      allCandidates.slice(0, 2).map(async (c) => {
+        let html;
+        try { html = await httpGet(c.url, { timeout: T_PAGE }); }
+        catch { return []; }
+        const $ = cheerio.load(html);
+
+        const protLinks = [];
+        $('a[href*="systemads"]').each((_i, el) => {
+          const href = $(el).attr('href') || '';
+          if (!/systemads\.[a-z]+\/get\.php\?id=/i.test(href)) return;
+          const label = $(el).closest('p, li, div, td, strong').text().trim().slice(0, 160)
+                     || $(el).text().trim();
+          protLinks.push({ url: href, label });
+        });
+
+        const resolved = await Promise.all(
+          protLinks.slice(0, 6).map(async (p) => ({
+            ...p,
+            magnet: await resolveSystemadsMagnet(p.url),
+          }))
+        );
+
+        return resolved.filter((r) => r.magnet);
+      })
+    );
+
+    const streams = [];
+    const seen = new Set();
+
+    for (const list of perCandidate) {
+      for (const r of list) {
+        const hash = extractInfoHash(r.magnet);
+        if (!hash || seen.has(hash)) continue;
+
+        const filename = extractDn(r.magnet) || r.label;
+        const quality = inferQuality(r.label + ' ' + filename);
+        const isPack = filenameIsPack(r.label) || filenameIsPack(filename);
+
+        if (episode) {
+          const covers = torrentCoversEpisode(filename, episode)
+                      || torrentCoversEpisode(r.label, episode);
+          if (!covers && !isPack) continue;
+        }
+
+        seen.add(hash);
+        streams.push({
+          name: `${name} ${quality}`,
+          description: [isPack ? '📦 PACK' : null, (r.label || '').slice(0, 80)]
+            .filter(Boolean).join(' · ') || name,
+          infoHash: hash,
+        });
+      }
+    }
+
+    console.log(`[${tag}] ✓ ${streams.length} stream(s)`);
+    return streams;
+  };
+}
+
+const providerBluDV = makeSystemadsProvider({
+  name: 'BluDV',
+  base: 'https://bludv1.com',
+  tag:  'BluDV',
+});
+
+const providerBaixaHDR = makeSystemadsProvider({
+  name: 'BaixaHDR',
+  base: 'https://baixafilmeshdr.net',
+  tag:  'BaixaHDR',
+});
+
 // ─── Provider: XFilmes (redirect-based) ─────────────────────────────────────
 
 /**
@@ -758,12 +901,14 @@ async function providerXFilmes({ enTitle, brTitle, year, type, season, episode }
 // ─── Provider registry ──────────────────────────────────────────────────────
 
 const PROVIDERS = [
-  { key: 'ytsbr',      fn: providerYTSBR,      priority: 1 },
-  { key: 'nerdfilmes', fn: providerNerdFilmes, priority: 2 },
-  { key: 'xfilmes',    fn: providerXFilmes,    priority: 3 },
-  { key: 'apache',     fn: providerApache,     priority: 4 },
-  { key: 'hdr',        fn: providerHDR,        priority: 5 },
-  { key: 'nyaa',       fn: providerNyaa,       priority: 6 },
+  { key: 'ytsbr',       fn: providerYTSBR,      priority: 1 },
+  { key: 'bludv',       fn: providerBluDV,      priority: 2 },
+  { key: 'nerdfilmes',  fn: providerNerdFilmes, priority: 3 },
+  { key: 'xfilmes',     fn: providerXFilmes,    priority: 4 },
+  { key: 'baixahdr',    fn: providerBaixaHDR,   priority: 5 },
+  { key: 'apache',      fn: providerApache,     priority: 6 },
+  { key: 'hdr',         fn: providerHDR,        priority: 7 },
+  { key: 'nyaa',        fn: providerNyaa,       priority: 8 },
 ];
 
 /** Executa provider com timeout hard para não estourar o orçamento total. */
@@ -904,7 +1049,7 @@ async function getStreams(type, id) {
     // Nyaa é mais útil para animes; ainda assim rodamos para filmes porque
     // não conseguimos detectar anime 100% sem metadata extra.
     const results = await Promise.all(
-      PROVIDERS.map((p) => runWithTimeout(p.fn, ctx, 7_500, p.key))
+      PROVIDERS.map((p) => runWithTimeout(p.fn, ctx, 9_000, p.key))
     );
 
     // Agrega + dedup por infoHash

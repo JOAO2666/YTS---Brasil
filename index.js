@@ -22,12 +22,12 @@ const debrid = require('./debrid');
 
 const manifest = {
   id: 'org.joaoe.ytsbr.pro',
-  version: '3.1.0',
+  version: '3.2.0',
   name: 'YTSBR Pro',
   description:
     'Filmes, séries e animes em pt-BR — busca multi-provider (YTS Brasil, ' +
-    'NerdFilmes, XFilmes, HDR, Apache, Nyaa.si) com cache Supabase ' +
-    'pré-indexado e Real-Debrid opcional.',
+    'BluDV, NerdFilmes, XFilmes, BaixaFilmesHDR, HDR, Apache, Nyaa.si) com ' +
+    'cache Supabase pré-indexado e Real-Debrid opcional.',
   logo: 'https://assets.ytsbr.com/favicon-32x32.png',
   background: 'https://assets.ytsbr.com/og-image.jpg',
   contactEmail: 'joao2666@users.noreply.github.com',

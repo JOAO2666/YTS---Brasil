@@ -4,7 +4,7 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen?logo=node.js)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> Stremio addon multi-provider que agrega torrents em pt-BR de **YTS Brasil**, **NerdFilmes**, **XFilmes**, **HDR Torrent**, **Apache Torrent** e **Nyaa.si** — com tradução automática do título e busca paralela.
+> Stremio addon multi-provider que agrega torrents em pt-BR de **YTS Brasil**, **BluDV**, **NerdFilmes**, **XFilmes**, **BaixaFilmesHDR**, **HDR Torrent**, **Apache Torrent** e **Nyaa.si** — com tradução automática do título e busca paralela.
 
 ---
 
@@ -12,14 +12,14 @@
 
 | | Feature | Details |
 |---|---|---|
-| 🌐 | **Multi-Provider** | YTSBR · NerdFilmes · XFilmes · HDR Torrent · Apache Torrent · Nyaa.si — todos em paralelo |
+| 🌐 | **Multi-Provider** | YTSBR · BluDV · NerdFilmes · XFilmes · BaixaFilmesHDR · HDR Torrent · Apache Torrent · Nyaa.si — todos em paralelo |
 | 🇧🇷 | **Universal Search** | Traduz títulos IMDb EN → pt-BR via TMDB e consulta os sites em ambos os idiomas simultaneamente |
-| ⚡ | **Pipeline Paralelo** | Cinemeta + TMDB + 6 providers rodam concorrentemente — resposta típica dentro do orçamento de 10 s da Vercel |
+| ⚡ | **Pipeline Paralelo** | Cinemeta + TMDB + 8 providers rodam concorrentemente — resposta típica dentro do orçamento de 10 s da Vercel |
 | 💾 | **Smart Cache** | Cache de 2 h em memória; lookups subsequentes retornam em < 50 ms |
 | 🎬 | **Filmes** | 720p · 1080p · 4K — Dual Áudio, Dublado, Legendado |
 | 📺 | **Séries** | Roteamento automático por temporada/episódio com suporte a packs |
 | 🇯🇵 | **Anime** | Nyaa.si + YTSBR · detecta episódios individuais e batches |
-| 🔗 | **Formatos** | Magnet hashes (infoHash) + `.torrent` URLs + resolução de redirects (XFilmes) |
+| 🔗 | **Formatos** | Magnet hashes (infoHash) + `.torrent` URLs + resolução de redirects (XFilmes) + bypass do "protetor de links" `systemads.xyz` (BluDV / BaixaFilmesHDR) sem seguir redirects, timer ou ads |
 | 🗄️ | **Cache Supabase** | Torrents pré-indexados · lookups em < 200 ms (opt-in via env vars) |
 | 🔄 | **Auto-indexer** | GitHub Action roda a cada 6 h, popula o cache com top 100 títulos TMDB |
 | ⚡ | **Real-Debrid** | Suporte opcional para marcar streams com cache em RD |
@@ -112,10 +112,10 @@ Se tiver conta RD, adicione `REALDEBRID_KEY` no Vercel (obter em [real-debrid.co
             │  (título)  ║  (pt-BR)  │
             └────────────┬───────────┘
                          ▼
-   ┌────────┬────────────┬────────────┬────────────┬────────┐
-   │ YTSBR  │ NerdFilmes │  XFilmes   │   Apache   │  HDR   │  +  Nyaa
-   └────────┴────────────┴────────────┴────────────┴────────┘
-                         │   (6 providers em paralelo)
+   ┌───────┬───────┬────────────┬──────────┬───────────┬────────┬─────┐
+   │ YTSBR │ BluDV │ NerdFilmes │ XFilmes  │ BaixaHDR  │ Apache │ HDR │ +Nyaa
+   └───────┴───────┴────────────┴──────────┴───────────┴────────┴─────┘
+                         │   (8 providers em paralelo)
                          ▼
                Agregação + dedup por infoHash
                          │
@@ -138,8 +138,10 @@ Todas as chamadas externas rodam em paralelo via `Promise.all`, cada provider co
 | Provider | Estratégia | Foco |
 |---|---|---|
 | **YTSBR** | JSON API + `data-downloads` | Filmes/Séries pt-BR |
+| **BluDV** | `/?s=` + resolver `systemads.xyz` (reverse-base64 no-redirect) | Filmes/Séries/Animes pt-BR |
 | **NerdFilmes** | `/?s=` + magnets diretos | Filmes/Séries pt-BR |
 | **XFilmes** | `/?s=` + redirect 302 (`/?go=HASH` → `magnet:`) | Filmes/Séries pt-BR |
+| **BaixaFilmesHDR** | `/?s=` + resolver `systemads.xyz` (reverse-base64 no-redirect) | Filmes/Séries pt-BR |
 | **HDR Torrent** | `/?s=` + magnets diretos | Filmes/Séries pt-BR |
 | **Apache Torrent** | `/?s=` + magnets diretos | Filmes/Séries pt-BR |
 | **Nyaa.si** | Tabela HTML com magnets embutidos | Animes / live-action asiático |
@@ -168,7 +170,7 @@ npm run dev        # uses --watch (Node 18+)
 ```
 .
 ├── index.js                       # Addon manifest, handlers & HTTP layer
-├── scraper.js                     # 6-provider aggregator + orchestration
+├── scraper.js                     # 8-provider aggregator + orchestration
 ├── db.js                          # Supabase cache (read-through + write-behind)
 ├── debrid.js                      # Real-Debrid integration (optional)
 ├── scripts/
@@ -192,7 +194,7 @@ npm run dev        # uses --watch (Node 18+)
 | Framework | Stremio Addon SDK + Express |
 | Translation | TMDB API (free) |
 | Scraping | Axios + Cheerio |
-| Providers | YTSBR · NerdFilmes · XFilmes · HDR · Apache · Nyaa.si |
+| Providers | YTSBR · BluDV · NerdFilmes · XFilmes · BaixaFilmesHDR · HDR · Apache · Nyaa.si |
 | Cache | node-cache (2 h) + Supabase Postgres (72 h) |
 | Indexer | GitHub Actions cron 6 h + TMDB Popular API |
 | Debrid | Real-Debrid API (optional) |
